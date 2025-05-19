@@ -4,7 +4,7 @@ const REGISTRY_URLS = {
   blue: 'http://npm.m2.blue.cdtapps.com'
 } as const;
 
-type RegistryType = keyof typeof REGISTRY_URLS;
+export type RegistryType = keyof typeof REGISTRY_URLS;
 
 interface PackageOptions {
   registry?: RegistryType;
@@ -23,12 +23,16 @@ function getRegistryUrl(): string {
   return REGISTRY_URLS[currentRegistry];
 }
 
-interface PackageMetadata {
+export interface PackageMetadata {
   'dist-tags': {
     latest: string;
   };
   versions: {
     [version: string]: {
+      name?: string;
+      version?: string;
+      description?: string;
+      readme?: string;
       dist?: {
         tarball?: string;
       };
@@ -99,8 +103,8 @@ export async function fetchPackageMetadata(packageName: string, options: Package
   return await metadataRes.json();
 }
 
-async function getTarballUrl(metadata: PackageMetadata, packageName: string, version: string): Promise<string> {
-  const resolvedVersion = version === 'latest' ? metadata['dist-tags'].latest : version;
+async function getTarballUrl(metadata: PackageMetadata, packageName: string, version: string | undefined): Promise<string> {
+  const resolvedVersion = !version || version === 'latest' ? metadata['dist-tags'].latest : version;
   const tarballUrl = metadata.versions[resolvedVersion]?.dist?.tarball;
   
   if (!tarballUrl) {
