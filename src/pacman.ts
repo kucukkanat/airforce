@@ -1,5 +1,27 @@
-const REGISTRY_HOSTNAME = 'http://npm.m2.blue.cdtapps.com';
-// const REGISTRY_HOSTNAME = 'https://registry.npmjs.org';
+// Supported registry URLs
+const REGISTRY_URLS = {
+  npm: 'https://registry.npmjs.org',
+  blue: 'http://npm.m2.blue.cdtapps.com'
+} as const;
+
+type RegistryType = keyof typeof REGISTRY_URLS;
+
+interface PackageOptions {
+  registry?: RegistryType;
+}
+
+// Default registry
+let currentRegistry: RegistryType = 'blue';
+
+// Function to set the current registry
+export function setNpmRegistry(registry: RegistryType): void {
+  currentRegistry = registry;
+}
+
+// Get the current registry URL
+function getRegistryUrl(): string {
+  return REGISTRY_URLS[currentRegistry];
+}
 
 interface PackageMetadata {
   'dist-tags': {
@@ -24,11 +46,54 @@ interface TarHeader {
   fileSize: number;
 }
 
-export async function fetchPackageMetadata(packageName: string): Promise<PackageMetadata> {
-  const metadataRes = await fetch(`${REGISTRY_HOSTNAME}/${packageName}`);
+type ParsedNpmPackageString = {
+  scope?: string;
+  name: string;
+  version?: string;
+};
+
+function parsePackageString(packageString: string): ParsedNpmPackageString {
+  // Regex breakdown:
+  // ^(@[^/]+\/)?   => optional scope (e.g. @scope/)
+  // ([^@]+)        => package name (until @ or end)
+  // (@(.+))?$      => optional version (after @)
+  const match = packageString.match(/^(@[^/]+\/)?([^@]+)(@(.+))?$/);
+
+  if (!match) {
+    throw new Error('Invalid npm package string');
+  }
+
+  const scope = match[1]?.slice(0, -1); // Remove trailing slash
+  const name = match[2];
+  const version = match[4] || 'latest'; // Default to 'latest' if no version is specified
+
+  return {
+    ...(scope && { scope }),
+    name,
+    version
+  };
+}
+
+export async function fetchPackageMetadata(packageName: string, options: PackageOptions = {}): Promise<PackageMetadata> {
+  // Remove any trailing @ that might have been accidentally added
+  const cleanPackageName = packageName.endsWith('@') ? packageName.slice(0, -1) : packageName;
+  const registryUrl = options.registry ? REGISTRY_URLS[options.registry] : getRegistryUrl();
+  
+  // Ensure the package name is properly encoded for URLs
+  const encodedPackageName = cleanPackageName.startsWith('@') 
+    ? `@${encodeURIComponent(cleanPackageName.slice(1))}` 
+    : encodeURIComponent(cleanPackageName);
+  
+  // Ensure clean URL construction
+  const url = new URL(encodedPackageName, registryUrl + '/');
+  
+  const metadataRes = await fetch(url.toString());
   
   if (!metadataRes.ok) {
-    throw new Error(`Failed to fetch metadata for ${packageName} (Status: ${metadataRes.status})`);
+    throw new Error(
+      `Failed to fetch metadata for ${cleanPackageName} (Status: ${metadataRes.status})\n` +
+      `URL: ${url.toString()}`
+    );
   }
 
   return await metadataRes.json();
@@ -116,9 +181,10 @@ function extractFileContent(data: Uint8Array, offset: number, size: number): str
   }
 }
 
-export async function fetchNpmPackageFiles(packageName: string, version = 'latest'): Promise<PackageFile[]> {
-  const metadata = await fetchPackageMetadata(packageName);
-  const tarballUrl = await getTarballUrl(metadata, packageName, version);
+export async function fetchNpmPackageFiles(packageSpecifier: string, options: PackageOptions = {}): Promise<PackageFile[]> {
+  const { name, version, scope } = parsePackageString(packageSpecifier);
+  const metadata = await fetchPackageMetadata(`${scope ? `${scope}/` : ''}${name}`, options);
+  const tarballUrl = await getTarballUrl(metadata, name, version);
   const tarData = await fetchAndDecompressTarball(tarballUrl);
 
   const files: PackageFile[] = [];
