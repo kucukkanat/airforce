@@ -1,4 +1,4 @@
-# 🎖️ Airoforce: An NPM Package Explorer
+# 🎖️ Airforce: An NPM Package Explorer
 
 A modern web application for exploring and dynamically loading NPM packages. Built with TypeScript and Web Components, this project allows you to browse package information from multiple registries and dynamically import packages directly in the browser.
 
