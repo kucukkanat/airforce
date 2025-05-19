@@ -1,6 +1,98 @@
-# Visual Byte-by-Byte Structure of a Tarball
+# 🎖️ Airoforce: An NPM Package Explorer
 
-A tarball (.tar file) is a simple, linear sequence of 512-byte blocks, each representing either a file header, file data, or padding. Here's a breakdown of how the structure looks byte by byte:
+A modern web application for exploring and dynamically loading NPM packages. Built with TypeScript and Web Components, this project allows you to browse package information from multiple registries and dynamically import packages directly in the browser.
+
+## Features
+
+### Package Card Component (`<package-card>`)
+- 📦 Display package information in a sleek, collapsible card interface
+- 🔄 Switch between different package versions
+- 📖 View package README content with markdown rendering
+- ⚡ Dynamically import and load packages directly in the browser
+- 🔀 Support for multiple NPM registries (npm, blue)
+
+### Example Usage
+
+```html
+<!-- Basic usage with default registry (blue) -->
+<package-card package="@ingka/skapa-webc-element"></package-card>
+
+<!-- Using npm registry -->
+<package-card package="react" registry="npm"></package-card>
+```
+
+### Component Attributes
+
+| Attribute | Description                          | Values              |
+|-----------|--------------------------------------|---------------------|
+| package   | The name of the npm package          | any valid package  |
+| registry  | The registry to fetch packages from  | "npm" or "blue"    |
+
+## Architecture
+
+### Core Components
+
+1. **PackageCard** (`src/package-card.ts`)
+   - Web Component for displaying package information
+   - Handles version selection and package loading
+   - Built-in markdown rendering for README files
+   - Collapsible UI with persistent header
+
+2. **Package Manager** (`src/pacman.ts`)
+   - Handles package metadata fetching
+   - Supports multiple registries
+   - Manages package file extraction
+   - Handles tarball decompression
+
+### Key Features
+
+#### Dynamic Package Loading
+The package card component can dynamically load packages by:
+1. Fetching package metadata
+2. Extracting the package entry point
+3. Creating a data URL from the source
+4. Dynamically importing the module
+5. Making it available via `window._packagename`
+
+#### Registry Support
+- Support for multiple NPM registries
+- Default registry configuration
+- Easy switching between registries per component
+
+#### Version Management
+- Display all available versions
+- Dynamic version switching
+- Automatic readme updates per version
+
+## Development
+
+### Setup
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+### Building
+```bash
+# Build for production
+npm run build
+```
+
+### Project Structure
+```
+src/
+  ├── package-card.ts    # Main web component
+  ├── pacman.ts         # Package management utilities
+  ├── main.ts           # Application entry point
+  └── style.css         # Global styles
+```
+
+## Technical Implementation Details
+
+### Tarball Structure and Processing
 
 ## Block Structure Overview
 
