@@ -6,6 +6,9 @@ export class PackageCard extends HTMLElement {
   private selectedVersion: string = 'latest';
   private readme: string = '';
   private loading: boolean = false;
+  private importSuccess = false;
+  private importError: string | null = null;
+  private expanded = true;
 
   constructor() {
     super();
@@ -62,6 +65,45 @@ export class PackageCard extends HTMLElement {
     }
   }
 
+  private async loadPackageModule() {
+    if (!this.metadata || !this.selectedVersion) return;
+    
+    this.loading = true;
+    this.render();
+
+    try {
+      const files = await fetchNpmPackageFiles(`${this.getAttribute('package')}@${this.selectedVersion}`, this.getRegistryOption());
+      
+      // Find package.json
+      const packageJsonFile = files.find(file => file.path === 'package.json');
+      if (!packageJsonFile) throw new Error('package.json not found');
+
+      const packageJson = JSON.parse(packageJsonFile.content);
+      const entrypoint = packageJson.module || packageJson.main || 'index.js';
+      
+      // Find the entry file
+      const entryFile = files.find(file => file.path === entrypoint);
+      if (!entryFile) throw new Error(`Entry file ${entrypoint} not found`);
+
+      // Create a data URL from the file content
+      const dataUrl = `data:text/javascript;base64,${btoa(entryFile.content)}`;
+      
+      // Dynamic import
+      const packageName = this.getAttribute('package')?.replace(/[@/]/g, '_') || '';
+      const module = await import(dataUrl);
+      (window as any)[`_${packageName}`] = module;
+      
+      // Show success state
+      this.importSuccess = true;
+    } catch (error) {
+      console.error('Error loading package module:', error);
+      this.importError = (error as Error).message;
+    } finally {
+      this.loading = false;
+      this.render();
+    }
+  }
+
   private getVersions(): string[] {
     if (!this.metadata) return [];
     return Object.keys(this.metadata.versions).sort((a, b) => {
@@ -81,6 +123,11 @@ export class PackageCard extends HTMLElement {
     }
     
     this.loading = false;
+    this.render();
+  }
+
+  private toggleExpanded() {
+    this.expanded = !this.expanded;
     this.render();
   }
 
@@ -112,13 +159,37 @@ export class PackageCard extends HTMLElement {
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
           padding: 1.5rem;
           margin: 1rem;
+          transition: all 0.2s ease;
+        }
+        .card.collapsed {
+          padding: 1rem;
         }
         .header {
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          margin-bottom: 1rem;
           gap: 1rem;
+          margin-bottom: ${this.expanded ? '1rem' : '0'};
+        }
+        .left-section {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          flex: 1;
+          min-width: 0;
+        }
+        .toggle-button {
+          background: none;
+          border: none;
+          padding: 0.5rem;
+          cursor: pointer;
+          color: #6e7781;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 4px;
+        }
+        .toggle-button:hover {
+          background: #f6f8fa;
         }
         .package-name {
           color: #2f363d;
@@ -143,6 +214,7 @@ export class PackageCard extends HTMLElement {
           background-repeat: no-repeat;
           background-position: right 0.75rem center;
           background-size: 12px;
+          min-width: 120px;
         }
         .version-select:hover {
           background-color: #e1f0ff;
@@ -150,6 +222,34 @@ export class PackageCard extends HTMLElement {
         .version-select:disabled {
           opacity: 0.6;
           cursor: not-allowed;
+        }
+        .action-button {
+          padding: 0.5rem 1rem;
+          background: #2ea44f;
+          color: white;
+          border: 1px solid rgba(27, 31, 35, 0.15);
+          border-radius: 6px;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-shrink: 0;
+        }
+        .action-button:hover {
+          background: #2c974b;
+        }
+        .action-button:disabled {
+          background: #94d3a2;
+          cursor: not-allowed;
+        }
+        .collapsible-content {
+          overflow: hidden;
+          height: ${this.expanded ? 'auto' : '0'};
+          opacity: ${this.expanded ? '1' : '0'};
+          transition: opacity 0.2s ease;
+          margin-top: ${this.expanded ? '1rem' : '0'};
         }
         .description {
           color: #586069;
@@ -208,36 +308,84 @@ export class PackageCard extends HTMLElement {
           padding: 1rem;
           text-align: center;
         }
+        .success-message {
+          color: #2ea44f;
+          font-size: 0.875rem;
+          margin-top: 0.5rem;
+        }
+        .error-message {
+          color: #cb2431;
+          font-size: 0.875rem;
+          margin-top: 0.5rem;
+        }
       </style>
-      <div class="card">
+      <div class="card ${this.expanded ? '' : 'collapsed'}">
         <div class="header">
-          <h2 class="package-name">${packageInfo.name || this.getAttribute('package')}</h2>
-          <select 
-            class="version-select" 
-            ?disabled="${this.loading}"
+          <button class="toggle-button" title="${this.expanded ? 'Collapse' : 'Expand'}">
+            ${this.expanded ? '▼' : '▶'}
+          </button>
+          <div class="left-section">
+            <h2 class="package-name">${packageInfo.name || this.getAttribute('package')}</h2>
+            <select 
+              class="version-select" 
+              ?disabled="${this.loading}"
+            >
+              ${versions.map(v => `
+                <option value="${v}" ${v === this.selectedVersion ? 'selected' : ''}>
+                  ${v}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          <button 
+            class="action-button" 
+            ?disabled="${this.loading || this.importSuccess}"
           >
-            ${versions.map(v => `
-              <option value="${v}" ${v === this.selectedVersion ? 'selected' : ''}>
-                ${v}
-              </option>
-            `).join('')}
-          </select>
+            ${this.loading ? '⌛ Loading...' : this.importSuccess ? '✓ Loaded' : '⚡ Load Package'}
+          </button>
         </div>
-        <p class="description">${packageInfo.description || ''}</p>
-        <div class="readme">
-          <div class="readme-content">
-            ${this.loading 
-              ? '<div class="loading">Loading README...</div>' 
-              : marked(this.readme)}
+
+        <div class="collapsible-content">
+          <p class="description">${packageInfo.description || ''}</p>
+          
+          ${this.importSuccess ? `
+            <div class="success-message">
+              ✓ Package loaded! Access it via window._${this.getAttribute('package')?.replace(/[@/]/g, '_')}
+            </div>
+          ` : ''}
+          
+          ${this.importError ? `
+            <div class="error-message">
+              ⚠️ ${this.importError}
+            </div>
+          ` : ''}
+
+          <div class="readme">
+            <div class="readme-content">
+              ${this.loading 
+                ? '<div class="loading">Loading README...</div>' 
+                : marked(this.readme)}
+            </div>
           </div>
         </div>
       </div>
     `;
 
-    // Add event listener after rendering
+    // Add event listeners after rendering
     const versionSelect = this.shadowRoot.querySelector('.version-select');
+    const actionButton = this.shadowRoot.querySelector('.action-button');
+    const toggleButton = this.shadowRoot.querySelector('.toggle-button');
+    
     if (versionSelect) {
       versionSelect.addEventListener('change', (e) => this.handleVersionChange(e));
+    }
+    
+    if (actionButton) {
+      actionButton.addEventListener('click', () => this.loadPackageModule());
+    }
+
+    if (toggleButton) {
+      toggleButton.addEventListener('click', () => this.toggleExpanded());
     }
   }
 }
