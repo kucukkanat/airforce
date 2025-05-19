@@ -1,101 +1,142 @@
 const REGISTRY_HOSTNAME = 'http://npm.m2.blue.cdtapps.com';
 // const REGISTRY_HOSTNAME = 'https://registry.npmjs.org';
-export async function fetchNpmPackageFiles(packageName, version = 'latest') {
-  // Fetch package metadata to get the tarball URL
+
+interface PackageMetadata {
+  'dist-tags': {
+    latest: string;
+  };
+  versions: {
+    [version: string]: {
+      dist?: {
+        tarball?: string;
+      };
+    };
+  };
+}
+
+interface PackageFile {
+  path: string;
+  content: string;
+}
+
+interface TarHeader {
+  fileName: string;
+  fileSize: number;
+}
+
+export async function fetchPackageMetadata(packageName: string): Promise<PackageMetadata> {
   const metadataRes = await fetch(`${REGISTRY_HOSTNAME}/${packageName}`);
   
-  if (!metadataRes.ok) throw new Error(`Failed to fetch metadata for ${packageName}`);
+  if (!metadataRes.ok) {
+    throw new Error(`Failed to fetch metadata for ${packageName} (Status: ${metadataRes.status})`);
+  }
 
-  const metadata = await metadataRes.json();
-  
+  return await metadataRes.json();
+}
+
+async function getTarballUrl(metadata: PackageMetadata, packageName: string, version: string): Promise<string> {
   const resolvedVersion = version === 'latest' ? metadata['dist-tags'].latest : version;
   const tarballUrl = metadata.versions[resolvedVersion]?.dist?.tarball;
-  if (!tarballUrl) throw new Error(`Version ${resolvedVersion} not found for package ${packageName}`);
-
-  // Fetch the tarball as a stream
-  const tarballRes = await fetch(tarballUrl);
-  if (!tarballRes.ok) throw new Error(`Failed to fetch tarball from ${tarballUrl}`);
-
-  // Decompress gzip stream (using CompressionStream API)
-  if (typeof DecompressionStream === 'undefined') {
-    console.warn('DecompressionStream API is not supported in this browser. Package extraction may not work.');
+  
+  if (!tarballUrl) {
+    throw new Error(`Version ${resolvedVersion} not found for package ${packageName}`);
   }
+
+  return tarballUrl;
+}
+
+async function fetchAndDecompressTarball(tarballUrl: string): Promise<Uint8Array> {
+  const tarballRes = await fetch(tarballUrl);
+  if (!tarballRes.ok) {
+    throw new Error(`Failed to fetch tarball from ${tarballUrl} (Status: ${tarballRes.status})`);
+  }
+
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('DecompressionStream API is not supported in this environment.');
+  }
+
   if (!tarballRes.body) {
     throw new Error('Tarball response body is null.');
   }
+
   const decompressedStream = tarballRes.body.pipeThrough(new DecompressionStream('gzip'));
+  return await readStreamToUint8Array(decompressedStream);
+}
 
-  // Read decompressed tar stream into Uint8Array chunks
-  const reader = decompressedStream.getReader();
+async function readStreamToUint8Array(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      totalLength += value.length;
+    }
+  }
+
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+function readTarHeader(data: Uint8Array, offset: number): TarHeader | null {
+  const header = data.subarray(offset, offset + 512);
   
-  interface ReadResult {
-    done: boolean;
-    value?: Uint8Array;
+  // Check for end-of-archive block (all zeros)
+  if (header.every(b => b === 0)) return null;
+
+  const fileName = readString(header, 0, 100);
+  if (!fileName) return null;
+
+  const sizeOctal = readString(header, 124, 12).trim();
+  const fileSize = parseInt(sizeOctal, 8);
+
+  return { fileName, fileSize };
+}
+
+function readString(buf: Uint8Array, start: number, length: number): string {
+  const bytes = buf.subarray(start, start + length);
+  const nullIndex = bytes.indexOf(0);
+  return new TextDecoder().decode(bytes.subarray(0, nullIndex === -1 ? length : nullIndex));
+}
+
+function extractFileContent(data: Uint8Array, offset: number, size: number): string {
+  const fileContent = data.subarray(offset, offset + size);
+  try {
+    return new TextDecoder('utf-8').decode(fileContent);
+  } catch {
+    return ''; // fallback empty string if decode fails
   }
+}
 
-  async function readAll(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<Uint8Array> {
-    const chunks: Uint8Array[] = [];
-    let totalLength = 0;
-    while (true) {
-      const { done, value }: ReadResult = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        totalLength += value.length;
-      }
-    }
-    const result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
-  }
+export async function fetchNpmPackageFiles(packageName: string, version = 'latest'): Promise<PackageFile[]> {
+  const metadata = await fetchPackageMetadata(packageName);
+  const tarballUrl = await getTarballUrl(metadata, packageName, version);
+  const tarData = await fetchAndDecompressTarball(tarballUrl);
 
-  const tarData = await readAll(reader);
-
-  // Parse tar archive (ustar format)
-  // Tar format: 512-byte headers + file data (padded to 512 bytes)
-  const files = [];
+  const files: PackageFile[] = [];
   let offset = 0;
 
-  function readString(buf, start, length) {
-    const bytes = buf.subarray(start, start + length);
-    const nullIndex = bytes.indexOf(0);
-    return new TextDecoder().decode(bytes.subarray(0, nullIndex === -1 ? length : nullIndex));
-  }
-
   while (offset < tarData.length) {
-    // Read header block (512 bytes)
-    const header = tarData.subarray(offset, offset + 512);
-    offset += 512;
+    const header = readTarHeader(tarData, offset);
+    if (!header) break;
+    
+    offset += 512; // Move past header
 
-    // Check if this is the end-of-archive block (all zeros)
-    if (header.every(b => b === 0)) break;
+    const content = extractFileContent(tarData, offset, header.fileSize);
+    offset += Math.ceil(header.fileSize / 512) * 512; // Move to next header, accounting for padding
 
-    const fileName = readString(header, 0, 100);
-    if (!fileName) break;
-
-    // File size is stored as octal string at offset 124, length 12
-    const sizeOctal = readString(header, 124, 12).trim();
-    const fileSize = parseInt(sizeOctal, 8);
-
-    // Read file content (padded to 512-byte blocks)
-    const fileContent = tarData.subarray(offset, offset + fileSize);
-    offset += Math.ceil(fileSize / 512) * 512;
-
-    // Decode file content as UTF-8 string (assuming text files)
-    // For binary files, you may want to store Uint8Array instead
-    let content;
-    try {
-      content = new TextDecoder('utf-8').decode(fileContent);
-    } catch {
-      content = ''; // fallback empty string if decode fails
-    }
-
-    // The npm package tarball contains files under "package/" prefix, strip it
-    const relativePath = fileName.startsWith('package/') ? fileName.slice(8) : fileName;
+    // Strip "package/" prefix from npm package files
+    const relativePath = header.fileName.startsWith('package/') 
+      ? header.fileName.slice(8) 
+      : header.fileName;
 
     files.push({ path: relativePath, content });
   }
