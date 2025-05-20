@@ -23,6 +23,7 @@ function getRegistryUrl(): string {
   return REGISTRY_URLS[currentRegistry];
 }
 
+// #region: Types
 export interface PackageMetadata {
   'dist-tags': {
     latest: string;
@@ -55,6 +56,7 @@ type ParsedNpmPackageString = {
   name: string;
   version?: string;
 };
+// #endregion
 
 function parsePackageString(packageString: string): ParsedNpmPackageString {
   // Regex breakdown:
@@ -79,36 +81,35 @@ function parsePackageString(packageString: string): ParsedNpmPackageString {
 }
 
 export async function fetchPackageMetadata(packageName: string, options: PackageOptions = {}): Promise<PackageMetadata> {
-  // Remove any trailing @ that might have been accidentally added
-  const cleanPackageName = packageName.endsWith('@') ? packageName.slice(0, -1) : packageName;
+  
   const registryUrl = options.registry ? REGISTRY_URLS[options.registry] : getRegistryUrl();
   
   // Ensure the package name is properly encoded for URLs
-  const encodedPackageName = cleanPackageName.startsWith('@') 
-    ? `@${encodeURIComponent(cleanPackageName.slice(1))}` 
-    : encodeURIComponent(cleanPackageName);
+  const encodedPackageName = packageName.startsWith('@') 
+    ? `@${encodeURIComponent(packageName.slice(1))}` 
+    : encodeURIComponent(packageName);
   
   // Ensure clean URL construction
   const url = new URL(encodedPackageName, registryUrl + '/');
   
-  const metadataRes = await fetch(url.toString());
+  const metadataResponse = await fetch(url.toString());
   
-  if (!metadataRes.ok) {
+  if (!metadataResponse.ok) {
     throw new Error(
-      `Failed to fetch metadata for ${cleanPackageName} (Status: ${metadataRes.status})\n` +
+      `Failed to fetch metadata for ${packageName} (Status: ${metadataResponse.status})\n` +
       `URL: ${url.toString()}`
     );
   }
 
-  return await metadataRes.json();
+  return await metadataResponse.json();
 }
 
-async function getTarballUrl(metadata: PackageMetadata, packageName: string, version: string | undefined): Promise<string> {
+async function getTarballUrl(metadata: PackageMetadata, version: string | undefined): Promise<string> {
   const resolvedVersion = !version || version === 'latest' ? metadata['dist-tags'].latest : version;
   const tarballUrl = metadata.versions[resolvedVersion]?.dist?.tarball;
-  
+  debugger
   if (!tarballUrl) {
-    throw new Error(`Version ${resolvedVersion} not found for package ${packageName}`);
+    throw new Error(`Version ${resolvedVersion} not found for package ${metadata.versions[resolvedVersion]?.name}`);
   }
 
   return tarballUrl;
@@ -183,7 +184,7 @@ function extractFileContent(data: Uint8Array, offset: number, size: number): str
 export async function fetchNpmPackageFiles(packageSpecifier: string, options: PackageOptions = {}): Promise<PackageFile[]> {
   const { name, version, scope } = parsePackageString(packageSpecifier);
   const metadata = await fetchPackageMetadata(`${scope ? `${scope}/` : ''}${name}`, options);
-  const tarballUrl = await getTarballUrl(metadata, name, version);
+  const tarballUrl = await getTarballUrl(metadata, version);
   const tarData = await fetchAndDecompressTarball(tarballUrl);
 
   const files: PackageFile[] = [];

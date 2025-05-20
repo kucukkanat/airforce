@@ -90,7 +90,8 @@ export class PackageCard extends HTMLElement {
       
       // Dynamic import
       const packageName = this.getAttribute('package')?.replace(/[@/]/g, '_') || '';
-      const module = await import(dataUrl);
+      
+      const module = await import(/* @vite-ignore */dataUrl);
       (window as any)[`_${packageName}`] = module;
       
       // Show success state
@@ -350,7 +351,7 @@ export class PackageCard extends HTMLElement {
           
           ${this.importSuccess ? `
             <div class="success-message">
-              ✓ Package loaded! Access it via window._${this.getAttribute('package')?.replace(/[@/]/g, '_')}
+              ✓ Package loaded! Access it via \`window._${this.getAttribute('package')?.replace(/[@/]/g, '_')}\`
             </div>
           ` : ''}
           
